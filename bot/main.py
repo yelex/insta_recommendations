@@ -7,6 +7,8 @@ from aiogram import Bot, Dispatcher
 
 from bot.config import load_settings
 from bot.handlers import router
+from pipeline.orchestrator import PipelineConfig
+from storage.db import path_from_database_url
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,8 +23,19 @@ async def main() -> None:
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
 
-    logger.info("Бот запускается, media_storage_dir=%s", settings.media_storage_dir)
-    await dispatcher.start_polling(bot, media_storage_dir=settings.media_storage_dir)
+    pipeline_config = PipelineConfig(
+        glm_api_key=settings.glm_api_key,
+        glm_base_url=settings.glm_base_url,
+        database_path=str(path_from_database_url(settings.database_url)),
+    )
+
+    logger.info(
+        "Бот запускается, media_storage_dir=%s, database=%s",
+        settings.media_storage_dir, pipeline_config.database_path,
+    )
+    await dispatcher.start_polling(
+        bot, media_storage_dir=settings.media_storage_dir, pipeline_config=pipeline_config
+    )
 
 
 if __name__ == "__main__":

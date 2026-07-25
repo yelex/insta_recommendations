@@ -1,8 +1,10 @@
 """Telegram-обработчики: приём видео и заглушка для остальных типов входа.
 
-Реальная обработка (frame-extraction, vision, transcribe, aggregate,
-geocode) подключается в следующих итерациях через оркестратор в
-`pipeline/orchestrator.py`. Здесь бот только сохраняет файл и логирует событие.
+Видео теперь прогоняется через весь пайплайн (`pipeline/orchestrator.py`):
+extract → transcribe/vision → aggregate → geocode → store. Диалог
+уточнения (SKILLS.md, скилл 6, user-clarification) пока не реализован —
+при низкой уверенности бот честно сообщает об этом и сохраняет черновик,
+не переспрашивая (это отдельная следующая итерация).
 """
 
 from __future__ import annotations
@@ -17,9 +19,30 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from pipeline.aggregate import AggregationError
+from pipeline.frame_extraction import FrameExtractionError
+from pipeline.geocode import GeocodingError
 from pipeline.ingest import create_video_raw_item
+from pipeline.orchestrator import PipelineConfig, ProcessingResult, process_video_item
+from pipeline.transcribe import TranscriptionError
+from pipeline.vision import VisionAnalysisError
+from storage.db import StorageError
 
 logger = logging.getLogger(__name__)
+
+# Ошибки, которые могут прилететь из process_video_item — ловим их здесь,
+# чтобы одно неудачное видео не роняло цикл обработки и пользователь
+# получал внятный ответ (AGENTS.md: try/except с понятным логом на внешние
+# вызовы; ValueError — из orchestrator.process_video_item на RawItem без файла).
+PIPELINE_ERRORS = (
+    FrameExtractionError,
+    TranscriptionError,
+    VisionAnalysisError,
+    AggregationError,
+    GeocodingError,
+    StorageError,
+    ValueError,
+)
 
 router = Router(name="dagestan_trip_bot")
 
@@ -54,8 +77,29 @@ async def handle_start(message: Message) -> None:
     )
 
 
+def _format_result_message(result: ProcessingResult) -> str:
+    location = result.location
+
+    if result.needs_clarification:
+        return (
+            "Сохранил, но не смог уверенно определить место 🤔\n"
+            f"Черновик: {location.name or '—'}"
+            + (f", {location.region}" if location.region else "")
+            + f" (уверенность {location.confidence:.2f}).\n"
+            "Уточнение вручную — в одной из следующих итераций."
+        )
+
+    coords = f"{location.lat:.5f}, {location.lng:.5f}" if location.lat is not None else "не найдены"
+    region_part = f", {location.region}" if location.region else ""
+    return (
+        f"Готово ✅ {location.name}{region_part}\n"
+        f"Тип: {location.place_type}\n"
+        f"Координаты: {coords}"
+    )
+
+
 @router.message(F.video)
-async def handle_video(message: Message, media_storage_dir: Path) -> None:
+async def handle_video(message: Message, media_storage_dir: Path, pipeline_config: PipelineConfig) -> None:
     video = message.video
     item_id = uuid.uuid4().hex
     media_storage_dir.mkdir(parents=True, exist_ok=True)
@@ -83,7 +127,19 @@ async def handle_video(message: Message, media_storage_dir: Path) -> None:
         raw_item.id,
     )
 
-    await message.answer("Видео получено и сохранено ✅\nОбработка появится в следующих итерациях.")
+    await message.answer("Видео получено, начинаю обработку — это может занять минуту...")
+
+    try:
+        result = await process_video_item(raw_item, pipeline_config)
+    except PIPELINE_ERRORS:
+        logger.exception("Ошибка обработки видео raw_item_id=%s", raw_item.id)
+        await message.answer(
+            "Видео сохранено, но обработать не получилось (сбой при распознавании места). "
+            "Файл остался на диске, можно будет обработать позже."
+        )
+        return
+
+    await message.answer(_format_result_message(result))
 
 
 @router.message(F.photo | F.text)
