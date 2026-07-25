@@ -1,7 +1,13 @@
 # Итерация 1: бот-скелет + frame-extraction.
-# faster-whisper, GLM SDK и geocoding-клиент добавятся в последующих итерациях.
 aiogram==3.13.1
 python-dotenv==1.0.1
+
+# Итерация 2: транскрибация (локальный faster-whisper).
+# GLM SDK и geocoding-клиент добавятся в последующих итерациях.
+faster-whisper==1.0.3
+# faster-whisper использует requests напрямую (utils.py), но новые версии
+# huggingface-hub больше не тянут requests транзитивно — фиксируем явно.
+requests==2.34.2
 
 pytest==8.3.3
 pytest-asyncio==0.24.0
