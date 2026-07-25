@@ -36,9 +36,16 @@ Telegram-бот для сбора локаций для путешествия �
   будущим `user-clarification`/оркестратором). 7 юнит-тестов с замоканным
   HTTP + проверено вживую на реальном ключе.
 
-Geocoding, user-clarification, storage и route-planner — в следующих
-итерациях. Модули пока не подключены друг к другу (оркестратор появится
-позже) и не вызываются из бота.
+**Итерация 5:**
+- модуль `storage/db.py` — SQLite-хранилище локаций (таблица `locations` по
+  схеме из SKILLS.md). `path_from_database_url()` разбирает `DATABASE_URL`
+  вида `sqlite:///...`. `list_locations(only_geocoded=True)` — фильтр,
+  которым позже воспользуется route-planner. 7 юнит-тестов на реальном
+  временном файле SQLite (это не внешний API, мокать нечего).
+
+Geocoding, user-clarification и route-planner — в следующих итерациях.
+Модули пока не подключены друг к другу (оркестратор появится позже) и не
+вызываются из бота.
 
 ### Про faster-whisper
 
