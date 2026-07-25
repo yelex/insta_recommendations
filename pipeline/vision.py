@@ -74,7 +74,10 @@ def _build_payload(image_paths: list[Path]) -> dict:
     return {
         "model": GLM_VISION_MODEL,
         "messages": [{"role": "user", "content": content}],
-        "max_tokens": 1024,
+        # Запас на случай, если модель тоже тратит скрытые reasoning-токены
+        # на content (подтверждено для glm-5 в aggregate.py — при низком
+        # лимите content обрезается до пустой строки).
+        "max_tokens": 2048,
         "temperature": 0.2,
     }
 
@@ -117,7 +120,10 @@ def _call_glm_batch_sync(image_paths: list[Path], api_key: str, base_url: str) -
             response.raise_for_status()
             raw_content = response.json()["choices"][0]["message"]["content"]
             return _parse_response(raw_content)
-        except (requests.RequestException, KeyError, IndexError) as exc:
+        except (requests.RequestException, KeyError, IndexError, VisionAnalysisError) as exc:
+            # VisionAnalysisError здесь — пустой/невалидный content, подтверждённый
+            # вживую перемежающийся сбой reasoning-моделей (см. aggregate.py),
+            # а не системная ошибка формата — стоит повторить попытку.
             last_error = exc
             logger.warning(
                 "vision-analysis: попытка %d/%d вызова GLM не удалась: %s",

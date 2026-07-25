@@ -72,6 +72,7 @@ async def handle_video(message: Message, media_storage_dir: Path) -> None:
         item_id=item_id,
         file_path=destination,
         caption_text=message.caption,
+        source_message_id=f"{message.chat.id}:{message.message_id}",
     )
 
     logger.info(

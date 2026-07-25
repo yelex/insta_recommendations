@@ -102,7 +102,11 @@ def _build_payload(data: AggregationInput) -> dict:
             {"role": "system", "content": AGGREGATION_SYSTEM_PROMPT},
             {"role": "user", "content": _build_user_message(data)},
         ],
-        "max_tokens": 512,
+        # glm-5 — reasoning-модель: помимо видимого content есть скрытые
+        # reasoning-токены (см. `reasoning_content` в ответе), которые тоже
+        # считаются в max_tokens. При низком лимите content обрезается до
+        # пустой строки — проверено вживую. Берём запас.
+        "max_tokens": 2048,
         "temperature": 0.2,
     }
 
@@ -152,7 +156,10 @@ def _call_glm_sync(data: AggregationInput, api_key: str, base_url: str) -> Aggre
             response.raise_for_status()
             raw_content = response.json()["choices"][0]["message"]["content"]
             return _parse_response(raw_content, raw_sources)
-        except (requests.RequestException, KeyError, IndexError) as exc:
+        except (requests.RequestException, KeyError, IndexError, AggregationError) as exc:
+            # AggregationError здесь — пустой/невалидный content (см. reasoning-модели
+            # ниже): подтверждено вживую, что это перемежающийся сбой, а не системная
+            # ошибка формата, — тот же запрос на повторной попытке отрабатывает штатно.
             last_error = exc
             logger.warning(
                 "text-aggregation: попытка %d/%d вызова GLM не удалась: %s",

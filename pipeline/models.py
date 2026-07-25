@@ -20,3 +20,6 @@ class RawItem:
     file_path: Path | None = None
     url: str | None = None
     caption_text: str | None = None
+    # "chat_id:message_id" исходного Telegram-сообщения — для storage.source_message_id
+    # (SKILLS.md, скилл 8) и для будущего user-clarification (ответить в тот же чат).
+    source_message_id: str | None = None

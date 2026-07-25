@@ -16,7 +16,12 @@ from pipeline.models import RawItem
 logger = logging.getLogger(__name__)
 
 
-def create_video_raw_item(item_id: str, file_path: Path, caption_text: str | None) -> RawItem:
+def create_video_raw_item(
+    item_id: str,
+    file_path: Path,
+    caption_text: str | None,
+    source_message_id: str | None = None,
+) -> RawItem:
     """Строит RawItem для уже сохранённого локально видеофайла."""
     raw_item = RawItem(
         id=item_id,
@@ -24,6 +29,7 @@ def create_video_raw_item(item_id: str, file_path: Path, caption_text: str | Non
         received_at=datetime.now(timezone.utc),
         file_path=file_path,
         caption_text=caption_text,
+        source_message_id=source_message_id,
     )
     logger.info(
         "video-ingest: получено видео id=%s file_path=%s caption=%r",
