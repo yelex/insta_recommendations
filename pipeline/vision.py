@@ -37,16 +37,33 @@ REQUEST_TIMEOUT_SECONDS = 60
 MAX_RETRIES = 3
 RETRY_BASE_DELAY_SECONDS = 1.0
 
-VISION_PROMPT = (
+VISION_PROMPT_SINGLE = (
+    "Внимательно изучи эти кадры из короткого видео о путешествии.\n\n"
+    "ГЛАВНАЯ ЗАДАЧА — найти название места:\n"
+    "1. Ищи ЛЮБОЙ текст на кадрах: подписи, наклейки, overlay, водяные знаки, "
+    "титры, текст в начале/конце видео. ВЫПИШИ ВСЁ что увидишь.\n"
+    "2. Текст может быть мелким, частично скрытым, на русском или другом языке.\n"
+    "3. Если текста нет — попробуй узнать место по виду (каньон, крепость, "
+    "водопад, аул, море, кафе и т.д.).\n"
+    "4. НЕ УГАДЫВАЙ одно и то же место для всех кадров. Если не уверен — "
+    "признайся (confidence < 0.5).\n\n"
+    "Ответь строго JSON без markdown:\n"
+    '{"overlay_text": "весь найденный текст", '
+    '"recognized_place": "название места или null", '
+    '"vision_confidence": 0.0}'
+)
+
+VISION_PROMPT_MULTI = (
     "Посмотри на эти кадры из видео о путешествии по Дагестану.\n"
-    "1. Есть ли на кадрах текстовые наклейки/подписи с названием места? Если "
-    "да — выпиши точный текст.\n"
-    "2. Узнаёшь ли ты конкретную достопримечательность (каньон, крепость, "
-    "водопад, аул, кафе и т.д.)? Если да — назови её.\n"
+    "Кадры могут быть из РАЗНЫХ локаций — это карусель с несколькими местами.\n"
+    "Найди ВСЕ места, которые показаны на кадрах.\n"
+    "1. Есть ли на кадрах текстовые наклейки/подписи с названием места? Выпиши их.\n"
+    "2. Узнаёшь конкретные достопримечательности? Назови каждое.\n"
     "Если ничего не удаётся определить — так и скажи, не выдумывай.\n\n"
-    "Ответь строго в формате JSON без пояснений и без markdown-обрамления:\n"
-    '{"overlay_text": "строка (пусто, если нет текста)", '
-    '"recognized_place": "строка или null", "vision_confidence": 0.0}'
+    "Ответь строго в формате JSON без пояснений и без markdown:\n"
+    '{"places": [{"overlay_text": "текст или пусто", '
+    '"recognized_place": "название или null", "vision_confidence": 0.0}]}\n'
+    "Каждый элемент массива places — отдельное место."
 )
 
 
@@ -56,9 +73,15 @@ class VisionAnalysisError(RuntimeError):
 
 @dataclass
 class VisionAnalysisResult:
-    overlay_text: str
-    recognized_place: str | None
-    vision_confidence: float
+    overlay_text: str = ""
+    recognized_place: str | None = None
+    vision_confidence: float = 0.0
+
+
+@dataclass
+class VisionMultiResult:
+    """Результат multi-place vision-анализа — список мест."""
+    places: list[VisionAnalysisResult]
 
 
 def _image_to_data_url(path: Path) -> str:
@@ -68,7 +91,7 @@ def _image_to_data_url(path: Path) -> str:
 
 
 def _build_payload(image_paths: list[Path]) -> dict:
-    content: list[dict] = [{"type": "text", "text": VISION_PROMPT}]
+    content: list[dict] = [{"type": "text", "text": VISION_PROMPT_SINGLE}]
     for path in image_paths:
         content.append({"type": "image_url", "image_url": {"url": _image_to_data_url(path)}})
     return {
@@ -172,5 +195,112 @@ async def analyze_frames(image_paths: list[Path], api_key: str, base_url: str) -
     logger.info(
         "vision-analysis: %d кадров, %d batch-вызов(а), recognized_place=%r, confidence=%.2f",
         len(image_paths), len(batches), merged.recognized_place, merged.vision_confidence,
+    )
+    return merged
+
+
+def _build_payload_multi(image_paths: list[Path]) -> dict:
+    content: list[dict] = [{"type": "text", "text": VISION_PROMPT_MULTI}]
+    for path in image_paths:
+        content.append({"type": "image_url", "image_url": {"url": _image_to_data_url(path)}})
+    return {
+        "model": GLM_VISION_MODEL,
+        "messages": [{"role": "user", "content": content}],
+        "max_tokens": 2048,
+        "temperature": 0.2,
+    }
+
+
+def _parse_response_multi(raw_content: str) -> VisionMultiResult:
+    text = raw_content.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.startswith("json"):
+            text = text[len("json"):]
+        text = text.strip()
+    try:
+        data = json.loads(text)
+        places_raw = data.get("places") or []
+        if not places_raw:
+            places_raw = [data]
+        places = [
+            VisionAnalysisResult(
+                overlay_text=p.get("overlay_text") or "",
+                recognized_place=p.get("recognized_place") or None,
+                vision_confidence=float(p.get("vision_confidence") or 0.0),
+            )
+            for p in places_raw
+        ]
+        if not places:
+            places = [VisionAnalysisResult()]
+        return VisionMultiResult(places=places)
+    except (json.JSONDecodeError, ValueError, AttributeError) as exc:
+        raise VisionAnalysisError(f"Не удалось разобрать multi-ответ GLM vision: {raw_content!r}") from exc
+
+
+def _call_glm_multi_sync(image_paths: list[Path], api_key: str, base_url: str) -> VisionMultiResult:
+    payload = _build_payload_multi(image_paths)
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    delay = RETRY_BASE_DELAY_SECONDS
+    last_error: Exception | None = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = requests.post(
+                f"{base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            raw_content = response.json()["choices"][0]["message"]["content"]
+            return _parse_response_multi(raw_content)
+        except (requests.RequestException, KeyError, IndexError, VisionAnalysisError) as exc:
+            last_error = exc
+            logger.warning("vision-multi: попытка %d/%d: %s", attempt, MAX_RETRIES, exc)
+            if attempt < MAX_RETRIES:
+                time.sleep(delay)
+                delay *= 2
+    raise VisionAnalysisError(f"GLM vision multi недоступен после {MAX_RETRIES} попыток: {last_error}")
+
+
+def _merge_multi_results(results: list[VisionMultiResult]) -> VisionMultiResult:
+    seen: dict[str, VisionAnalysisResult] = {}
+    for r in results:
+        for p in r.places:
+            key = (p.recognized_place or "").strip().lower()
+            if not key or key == "null":
+                continue
+            if key not in seen:
+                seen[key] = p
+            else:
+                # Оставляем вариант с большей уверенностью
+                if p.vision_confidence > seen[key].vision_confidence:
+                    seen[key] = p
+    places = list(seen.values())
+    if not places:
+        places = [VisionAnalysisResult()]
+    return VisionMultiResult(places=places)
+
+
+async def analyze_frames_multi(image_paths: list[Path], api_key: str, base_url: str) -> VisionMultiResult:
+    """Multi-place анализ: возвращает список мест из набора кадров."""
+    if not image_paths:
+        return VisionMultiResult(places=[VisionAnalysisResult()])
+
+    batches = [
+        image_paths[i : i + VISION_MAX_IMAGES_PER_BATCH]
+        for i in range(0, len(image_paths), VISION_MAX_IMAGES_PER_BATCH)
+    ]
+
+    loop = asyncio.get_running_loop()
+    results = [
+        await loop.run_in_executor(None, _call_glm_multi_sync, batch, api_key, base_url)
+        for batch in batches
+    ]
+
+    merged = _merge_multi_results(results)
+    logger.info(
+        "vision-multi: %d кадров, %d batch-вызов(а), найдено мест: %d",
+        len(image_paths), len(batches), len(merged.places),
     )
     return merged

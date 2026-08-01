@@ -16,3 +16,5 @@ media/audio/*
 
 .pytest_cache/
 .DS_Store
+media/work/
+bot.log
