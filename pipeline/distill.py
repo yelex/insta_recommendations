@@ -17,6 +17,7 @@ import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import requests
 
@@ -42,7 +43,6 @@ async def sync_all_coordinates(database_path: str) -> int:
     и обновляет координаты, если в locations они лучше/новее.
     Возвращает количество обновлённых записей.
     """
-    from datetime import datetime, timezone
 
     def _sync():
         conn = sqlite3.connect(database_path)
@@ -153,7 +153,6 @@ async def deduplicate_wiki_places(
     """Находит и сливает дубликаты wiki_places через LLM.
     Возвращает количество слитых записей.
     """
-    from datetime import datetime, timezone
 
     def _get_groups():
         conn = sqlite3.connect(database_path)
@@ -282,7 +281,6 @@ async def _merge_wiki_places(database_path: str, ids: list[str]) -> str | None:
     """Сливает несколько wiki_places в один. Оставляет запись с наибольшим post_count.
     Переносит sources, links, координаты. Удаляет лишние.
     """
-    from datetime import datetime, timezone
 
     def _merge():
         conn = sqlite3.connect(database_path)
@@ -476,7 +474,6 @@ async def _ensure_parent_region(
     if existing:
         return existing.id
 
-    from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
     record = WikiPlaceRecord(
         id=place_id,
@@ -737,7 +734,6 @@ async def run_distill_job(
                 wiki_place.source_location_ids_json = json.dumps(all_ids)
                 wiki_place.post_count = len(all_ids)
                 wiki_place.distill_prompt_version = DISTILL_PROMPT_VERSION
-                from datetime import datetime, timezone
                 wiki_place.distilled_at = datetime.now(timezone.utc)
 
                 # Parent region
@@ -756,7 +752,6 @@ async def run_distill_job(
                 draft = await distill_place(None, [rl], api_key, base_url)
                 nkey_new = normalize_key(draft.canonical_name, draft.region)
                 place_id = make_wiki_place_id(nkey_new)
-                from datetime import datetime, timezone
                 now = datetime.now(timezone.utc)
 
                 parent_id = None
@@ -826,7 +821,6 @@ async def rebuild_all_wiki(database_path: str, api_key: str, base_url: str) -> i
             draft = await distill_place(None, raws, api_key, base_url)
             nkey_new = normalize_key(draft.canonical_name, draft.region)
             place_id = make_wiki_place_id(nkey_new)
-            from datetime import datetime, timezone
             now = datetime.now(timezone.utc)
             all_ids = [r.id for r in raws]
 
