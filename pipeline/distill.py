@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import time
 from dataclasses import dataclass, field
 
@@ -41,7 +42,6 @@ async def sync_all_coordinates(database_path: str) -> int:
     и обновляет координаты, если в locations они лучше/новее.
     Возвращает количество обновлённых записей.
     """
-    import sqlite3
     from datetime import datetime, timezone
 
     def _sync():
@@ -153,7 +153,6 @@ async def deduplicate_wiki_places(
     """Находит и сливает дубликаты wiki_places через LLM.
     Возвращает количество слитых записей.
     """
-    import sqlite3
     from datetime import datetime, timezone
 
     def _get_groups():
@@ -283,7 +282,6 @@ async def _merge_wiki_places(database_path: str, ids: list[str]) -> str | None:
     """Сливает несколько wiki_places в один. Оставляет запись с наибольшим post_count.
     Переносит sources, links, координаты. Удаляет лишние.
     """
-    import sqlite3
     from datetime import datetime, timezone
 
     def _merge():
